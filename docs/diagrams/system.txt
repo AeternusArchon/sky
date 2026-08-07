@@ -1,0 +1,58 @@
+SKY — SYSTEM ARCHITECTURE  ·  v1.2  ·  canonical source
+Keep this file as the source of truth. Rendered versions derive from it.
+
+┌──────────────── CLIENTS — render + capture ─────────────────┐
+│   PC (room)      iPhone       iPad        Apple Watch        │
+│      └─── Sky PWA: VRM avatar · mic · speaker ──┘            │
+│           (WebGL renders HERE — server draws zero frames)    │
+└──────────────────────────┬───────────────────────────────────┘
+                           │ WSS — Tailscale (private, default)
+                           │       Cloudflare Tunnel + Access (public)
+┌──────────────────────────▼───────────────────────────────────┐
+│    SKY NODE — Mac Pro 2013 · Debian 13 · Docker Compose      │
+│                                                              │
+│  ┌──── sky-gateway ────────────────────────────────────────┐ │
+│  │  sessions · mic arbitration · streaming · CANCEL/STOP   │ │
+│  │  latency instrumentation      cost telemetry            │ │
+│  └────────────────────────┬────────────────────────────────┘ │
+│                           │                                  │
+│  ┌────────────────────┐   │   ┌──────────────────────────┐   │
+│  │  VOICE             │◄──┴──►│  SKY CORE (orchestrator) │   │
+│  │  openWakeWord      │       │  LiteLLM router  ────────┼───┼──> Claude API
+│  │  faster-whisper    │       │  tool dispatcher         │   │    OpenAI API
+│  │  Piper TTS         │       │  persona layer           │   │
+│  └────────────────────┘       │  PERMISSION BROKER       │   │
+│                               └────────────┬─────────────┘   │
+│  ┌────────────────┬────────────────┬───────▼──────────────┐  │
+│  │  MEMORY        │   KNOWLEDGE    │      ACTIONS         │  │
+│  │  Tier 3        │   Tier 2       │      Tier 1          │  │
+│  │  Postgres +    │  allowlisted   │  ActivePieces        │  │
+│  │  pgvector      │  collections   │  Calendar · Email    │  │
+│  │  source/time/  │  /sky/files    │  approval queue      │  │
+│  │  confidence/   │  rclone+       │     for writes       │  │
+│  │  expiry/delete │  Syncthing     │                      │  │
+│  └────────────────┴────────────────┴──────────────────────┘  │
+│                                                              │
+│  TIER 0 — secrets vault, isolated, never in LLM context      │
+└──────────────────────────────────────────────────────────────┘
+
+
+PHASE 0 SCOPE — what actually exists today
+──────────────────────────────────────────
+  [x] sky-gateway      HTTP + WS stub, health, telemetry hooks
+  [x] Postgres         pgvector, three tier-separated schemas
+  [x] backup/restore   restic, 5 layers, drill script
+  [x] health           CPU temp, SMART, RAM, disk, uptime
+  [ ] Tailscale        task 0.4
+  [ ] Cloudflare       task 0.5
+  [ ] sky-core         Phase 1
+  [ ] voice            Phase 4
+  [ ] avatar           Phase 5 (earned)
+
+
+PRIVILEGE MODEL
+───────────────
+  TIER 0  secrets       LLM never sees. Tools broker.
+  TIER 1  actions       read broad · WRITE requires approval
+  TIER 2  knowledge     allowlisted collections only
+  TIER 3  memory        operational (retrievable) | archive (not retrievable)

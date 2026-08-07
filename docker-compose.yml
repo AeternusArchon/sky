@@ -1,0 +1,91 @@
+name: sky
+
+# ═══════════════════════════════════════════════════════════════════════
+#  SKY NODE — Mac Pro 2013 · Debian 13 · Docker Compose
+#
+#  Security posture: NOTHING binds to 0.0.0.0 on the host. Every published
+#  port is loopback-only. External reach comes from Tailscale (private) or
+#  the Cloudflare Tunnel (public, Access-gated) — never from an open port
+#  on the router. See docs/THREAT-MODEL.md §3.
+# ═══════════════════════════════════════════════════════════════════════
+
+services:
+
+  postgres:
+    image: pgvector/pgvector:pg17
+    container_name: sky-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      # Deterministic collation — avoids surprise index rebuilds on upgrade
+      POSTGRES_INITDB_ARGS: "--locale-provider=icu --icu-locale=en-US --encoding=UTF8"
+    volumes:
+      # Runs ONCE, on first boot of an empty data volume. Editing these
+      # files later does nothing until the volume is destroyed.
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+      - sky-pgdata:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"        # loopback only — never expose Postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    shm_size: 256mb
+    networks: [sky]
+    logging: &loglimit
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  gateway:
+    build:
+      context: ./services/gateway
+      dockerfile: Dockerfile
+    container_name: sky-gateway
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      POSTGRES_HOST: postgres
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8080:8080"        # Tailscale / cloudflared reach it here
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request,sys;sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/health',timeout=4).status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks: [sky]
+    logging: *loglimit
+
+  # ─── Optional: Cloudflare Tunnel ────────────────────────────────────
+  # Enable with:  docker compose --profile tunnel up -d
+  # Requires CLOUDFLARE_TUNNEL_TOKEN in .env. See ops/tunnel/README.md.
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: sky-tunnel
+    restart: unless-stopped
+    profiles: [tunnel]
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
+    depends_on:
+      gateway:
+        condition: service_healthy
+    networks: [sky]
+    logging: *loglimit
+
+volumes:
+  sky-pgdata:
+    name: sky-pgdata
+
+networks:
+  sky:
+    name: sky
+    driver: bridge
