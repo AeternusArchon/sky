@@ -230,7 +230,54 @@ Compose now builds Postgres locally with `pull_policy: build`. The image carries
 **🔴 Open obligation — blocks Phase 2.** Caddy currently provides TLS but **no authentication** for Sky. Every other service behind this proxy enforces its own login; Sky has none, because none was built. Present exposure is limited to the local network (`10.0.0.69`, RFC1918), which is acceptable while Sky holds no data.
 
 **This must be closed before any email or calendar credential is issued to Sky.** An assistant with inbox access must not be one known hostname away from anyone on the network. Obscurity buys time; it does not buy security.
+## DL-010 — Offsite backups on Cloudflare R2; correlated-failure risk accepted
 
+**Date:** 2026-08-07 · **Status:** ✅ Final · **Phase:** 0
+
+**Decision.** Encrypted offsite backups go to **Cloudflare R2** (`sky-backup` bucket, S3-compatible endpoint, restic). A second offsite target on an independent vendor is planned but not built.
+
+**Context.** SKY Node has **one physical disk** — a single 931 GB Apple blade SSD, no second drive, no external storage. Confirmed with `lsblk`. That makes offsite the only layer surviving hardware failure; local snapshots protect against operator error alone.
+
+**Alternatives considered.**
+
+| Option | Verdict |
+|---|---|
+| **Backblaze B2** | Recommended by the architect — independent vendor, no shared blast radius with DNS or TLS. |
+| **Cloudflare R2** | **Chosen.** Account, billing, and API-token workflow already exist. |
+| **Google Drive via rclone** | Rejected. restic writes many small objects, Drive's worst access pattern; adds an OAuth token to maintain; and Google also holds the operator's email, so one account loss would take mail *and* backups. |
+
+**Rationale for choosing R2 over the recommendation.** The reason was operational and legitimate: *an account that gets maintained beats a better one that gets neglected.* Backup systems fail from decay far more often than from design. Adding a fifth vendor to track during an active job search is a real cost, and the operator is better placed than the architect to judge his own maintenance capacity.
+
+**⚠️ Risk accepted, not avoided.** Cloudflare now holds DNS, TLS issuance, and offsite backups. A single account compromise or suspension takes all three at once — precisely the scenario where backups matter most. Documented rather than hidden.
+
+**Mitigations in place.**
+
+- API token is **Object Read & Write**, not Admin — it cannot delete the bucket it writes to
+- Token **scoped to `sky-backup` only**, not account-wide
+- `RESTIC_PASSWORD` stored in a password manager and a second location, **neither of which is SKY Node or Cloudflare** — a fire that takes the machine does not take the key
+- restic encrypts client-side; Cloudflare stores ciphertext it cannot read
+
+**Planned follow-up.** Add Backblaze B2 as a second target. `backup.sh` already loops over repositories, so this is a config addition, not a rewrite. Until then the correlated-failure risk stands.
+
+**Revisit when:** the second target is added, the Cloudflare account gains further dependencies, or maintenance capacity changes.
+
+---
+
+## DL-011 — Ops scripts are deployed to the host, not run from the repo
+
+**Date:** 2026-08-07 · **Status:** ✅ Final · **Phase:** 0
+
+**Decision.** `backup.sh` and `restore.sh` live canonically in this repo but execute from `/srv/sky-ops/` on the host. They talk to containers with `docker exec <name>` rather than `docker compose exec`.
+
+**Context.** Portainer clones the stack to `/data/compose/4` inside its own container (DL-008). A script running on the host cannot reach that path, so no compose project context is available.
+
+**Rationale.** `docker exec` needs only a container name and works regardless of how the stack was deployed. It also removes the last dependency on relative paths — the exact thing that broke the schema in DL-007.
+
+**Consequence.** A deliberate break from strict GitOps: the host copy must be updated by hand when the repo version changes. Accepted — ops tooling is a small, rarely-changed surface, and the alternative (cloning the repo a second time onto the host purely for scripts) adds a sync problem rather than removing one.
+
+**Scheduling.** `backup.sh` runs via systemd timer `sky-backup.timer` — daily at 03:30 with up to 15 minutes of jitter, `Persistent=true` so a missed run catches up at next boot. systemd was chosen over cron specifically because a failed cron job mails root and is never seen, while a failed systemd unit is visible in `systemctl status` and fully logged in the journal.
+
+---
 ---
 ## Restore drill log
 
