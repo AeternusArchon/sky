@@ -232,27 +232,17 @@ Compose now builds Postgres locally with `pull_policy: build`. The image carries
 **This must be closed before any email or calendar credential is issued to Sky.** An assistant with inbox access must not be one known hostname away from anyone on the network. Obscurity buys time; it does not buy security.
 
 ---
-
-<!-- ────────────────────────────────────────────────────────────────────
-     TEMPLATE — copy for each new decision
-
-## DL-0NN — <one-line decision in the imperative>
-
-**Date:** YYYY-MM-DD · **Status:** ✅ Final | 🟡 Provisional | ⛔ Superseded by DL-0NN · **Phase:** N
-
-**Decision.** What was decided.
-**Context.** What was true that forced the choice.
-**Rationale.** Why this over the alternative. Name the alternative.
-**Consequences.** What this costs, and what it now makes hard.
-**Revisit when:** the condition that would reopen this.
-──────────────────────────────────────────────────────────────────── -->
-
----
-
 ## Restore drill log
 
 Risk #4. A backup that has never been restored is a theory. Every drill gets a line here — including the failures, which are the useful ones.
 
+**Command:** `bash /srv/sky-ops/restore.sh` (local) · `bash /srv/sky-ops/restore.sh --r2` (offsite)
+**Cadence:** monthly minimum. Takes about 7 seconds.
+**Method:** restores the latest snapshot into a throwaway `sky_restore_drill` database, counts recovered schemas, tables, and the pgvector extension, then drops it. Production is never touched.
+
 | Date | Source | Result | Schemas | Tables | Notes |
 |---|---|---|---|---|---|
-| _pending_ | local | — | — | — | **Phase 0 does not complete until this row says PASS** |
+| 2026-08-07 | LOCAL | ✅ **PASS** | 3 / 3 | 8 | First drill. pgvector survived. |
+| 2026-08-07 | CLOUDFLARE R2 (offsite) | ✅ **PASS** | 3 / 3 | 8 | First offsite drill. Credentials, network path, and encryption key verified from outside the host. |
+
+**Next drill due:** 2026-09-07
