@@ -43,6 +43,7 @@ services:
     build:
       context: ./services/gateway
       dockerfile: Dockerfile
+      pull_policy: build 
     container_name: sky-gateway
     restart: unless-stopped
     environment:
