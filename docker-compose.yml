@@ -55,7 +55,7 @@ services:
       postgres:
         condition: service_healthy
     ports:
-      - "127.0.0.1:8080:8080"        # Tailscale / cloudflared reach it here
+      - "127.0.0.1:18090:8080"       # Caddy reaches it here
     healthcheck:
       test: ["CMD", "python", "-c",
              "import urllib.request,sys;sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/health',timeout=4).status==200 else 1)"]
