@@ -1,0 +1,60 @@
+# ─── TIER 0 — SECRETS. Nothing here ever reaches the repo. ───────────────
+.env
+.env.*
+!.env.example
+secrets/
+*.key
+*.pem
+*.p12
+*.pfx
+credentials.json
+token.json
+*token*.json
+service-account*.json
+cloudflared/*.json
+.restic-password
+*.age
+
+# ─── Personal data — Tier 2/3. Never committed. ──────────────────────────
+files/
+knowledge/
+memory-dump*
+*.dump
+*.sql.gz
+backups/
+restore-scratch/
+
+# ─── Runtime ─────────────────────────────────────────────────────────────
+*.log
+logs/
+*.pid
+.health.json
+
+# ─── Python ──────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# ─── Node (avatar client, later phases) ──────────────────────────────────
+node_modules/
+dist/
+.vite/
+
+# ─── Models / binaries ───────────────────────────────────────────────────
+*.vrm
+*.onnx
+*.bin
+*.gguf
+models/
+
+# ─── OS cruft ────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
