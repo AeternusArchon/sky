@@ -3,10 +3,11 @@ name: sky
 # ═══════════════════════════════════════════════════════════════════════
 #  SKY NODE — Mac Pro 2013 · Debian 13 · Docker Compose
 #
-#  Security posture: NOTHING binds to 0.0.0.0 on the host. Every published
-#  port is loopback-only. External reach comes from Tailscale (private) or
-#  the Cloudflare Tunnel (public, Access-gated) — never from an open port
-#  on the router. See docs/THREAT-MODEL.md §3.
+#  Deployed via Portainer Repository stack. Secrets come from Portainer's
+#  environment variables, NOT from a .env file — .env is gitignored and
+#  therefore absent from the clone. That is intentional (DL-003).
+#
+#  Nothing binds to a routable interface. Caddy fronts the gateway.
 # ═══════════════════════════════════════════════════════════════════════
 
 services:
@@ -19,15 +20,11 @@ services:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
-      # Deterministic collation — avoids surprise index rebuilds on upgrade
-      POSTGRES_INITDB_ARGS: "--locale-provider=icu --icu-locale=en-US --encoding=UTF8"
     volumes:
-      # Runs ONCE, on first boot of an empty data volume. Editing these
-      # files later does nothing until the volume is destroyed.
       - ./db/init:/docker-entrypoint-initdb.d:ro
       - sky-pgdata:/var/lib/postgresql/data
     ports:
-      - "127.0.0.1:5432:5432"        # loopback only — never expose Postgres
+      - "127.0.0.1:5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 10s
@@ -48,33 +45,41 @@ services:
       dockerfile: Dockerfile
     container_name: sky-gateway
     restart: unless-stopped
-    env_file: .env
     environment:
+      SKY_IDENTITY_NAME: ${SKY_IDENTITY_NAME:-Sky Prime}
+      SKY_ADDRESS_NAME: ${SKY_ADDRESS_NAME:-Sky}
+      SKY_ENV: ${SKY_ENV:-production}
+      SKY_VERSION: ${SKY_VERSION:-0.1.0-phase0}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      GATEWAY_ALLOWED_ORIGINS: ${GATEWAY_ALLOWED_ORIGINS:-}
       POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      SKY_MONTHLY_COST_CAP_USD: ${SKY_MONTHLY_COST_CAP_USD:-50}
+      SKY_COST_ALERT_THRESHOLD: ${SKY_COST_ALERT_THRESHOLD:-0.75}
     depends_on:
       postgres:
         condition: service_healthy
     ports:
-      - "127.0.0.1:18090:8080"       # Caddy reaches it here
+      - "127.0.0.1:18090:8080"
     healthcheck:
       test: ["CMD", "python", "-c",
              "import urllib.request,sys;sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/health',timeout=4).status==200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 15s
+      start_period: 20s
     networks: [sky]
     logging: *loglimit
 
-  # ─── Optional: Cloudflare Tunnel ────────────────────────────────────
-  # Enable with:  docker compose --profile tunnel up -d
-  # Requires CLOUDFLARE_TUNNEL_TOKEN in .env. See ops/tunnel/README.md.
   cloudflared:
     image: cloudflare/cloudflared:latest
     container_name: sky-tunnel
     restart: unless-stopped
     profiles: [tunnel]
-    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN:-}
     depends_on:
       gateway:
         condition: service_healthy
