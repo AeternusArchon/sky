@@ -278,6 +278,81 @@ Compose now builds Postgres locally with `pull_policy: build`. The image carries
 **Scheduling.** `backup.sh` runs via systemd timer `sky-backup.timer` — daily at 03:30 with up to 15 minutes of jitter, `Persistent=true` so a missed run catches up at next boot. systemd was chosen over cron specifically because a failed cron job mails root and is never seen, while a failed systemd unit is visible in `systemctl status` and fully logged in the journal.
 
 ---
+## DL-012 — Public access via Cloudflare Tunnel + Zero Trust Access
+
+**Date:** 2026-08-07 · **Status:** ✅ Final · **Phase:** 0
+**Supersedes:** the open authentication obligation recorded in DL-009
+
+**Decision.** Sky is reachable from anywhere at **`sky.overlordlabs.net`**, served by a Cloudflare Tunnel and gated by Cloudflare Zero Trust Access. The LAN path at `sky.home.overlordlabs.net` is unchanged and independent. Tailscale and NordVPN Meshnet were both rejected.
+
+**Context.** Phase 0's exit criteria require that Sky load on a phone from outside the house. All services were LAN-only (`10.0.0.69`, RFC1918). Three options existed: a forwarded port, a mesh VPN, or an authenticated public endpoint.
+
+Port forwarding was ruled out immediately — it contradicts DL-004 and would have published an assistant with no login to the open internet.
+
+**Alternatives considered.**
+
+| Option | Verdict |
+|---|---|
+| **Tailscale** (subnet router) | Rejected. Zero public surface, but requires a client installed and connected on every device. |
+| **NordVPN Meshnet** | Rejected. Already installed and free, but reaching the LAN requires routing all traffic through the host, and **NordVPN announced Meshnet's shutdown in 2025, reversed it after user backlash, and stated publicly that maintaining it "remains challenging and not the easiest thing to justify financially."** A dependency the vendor has already tried to end is a poor foundation for the path to one's assistant. |
+| **Cloudflare Tunnel + Access** | **Chosen.** |
+
+### The architect reversed twice. Recording it, because the reasoning matters more than the answer.
+
+**First position — Access.** Optimized for the stated requirement: reachable from any device without installing anything.
+
+**Second position — Tailscale.** On being asked to weigh the requirement itself rather than serve it, the recommendation flipped, on failure modes:
+
+> **Tailscale fails closed. Access fails open.**
+> A misconfigured Tailscale means nothing works. A misconfigured Access policy — a rule matching nothing, an application path not covering the right hostname, a permissive rule left over from testing — publishes an unauthenticated assistant to the internet. Given that Sky has no login of her own, the layer in front of her should be the one whose mistakes cost availability rather than exposure.
+
+It was also argued that the "any device" scenario does not survive examination: a work machine, a hotel computer, a borrowed laptop are precisely the devices on which one should *not* open an assistant holding a personal inbox.
+
+**Third position — back to Access, and final.** Overlord's counter was decisive:
+
+> *"wouldn't it be easier as well when we make the app?"*
+
+**Sky's client is a browser PWA.** Under Tailscale, every session depends on a VPN being connected — an extra state to check on iOS, a profile that can drop, and no viable client on watchOS at all. Under Access, it is a login that lasts a month.
+
+That argument wins on the plan's own terms. **Risk #2 is "no killer workflow," and the 7-Day Sky Test measures exactly one number: the times the operator gave up and opened ChatGPT instead.** A VPN toggle between a person and their assistant is precisely the friction that runs that number up.
+
+**A security failure that might happen lost to an adoption failure that reliably does.** The architect was optimizing against the wrong risk.
+
+### Mitigations that made an "fails open" design acceptable
+
+The failure-mode objection was not withdrawn — it was engineered around:
+
+1. **The Access policy was created and verified before the tunnel carried any traffic.** The application existed while `sky.overlordlabs.net` still resolved to nothing, so the gate was in place before the door.
+2. **Exact-email allowlist.** `Include → Emails → one address`. Not *Everyone*, not *Emails ending in*, and no Bypass rule at any point, including during testing.
+3. **Verified by observation, not assumption.** An anonymous request from a private browser window was confirmed stopped at Cloudflare's edge, having never reached the host.
+4. **The LAN path was left untouched.** Home access still runs Caddy → `127.0.0.1:18090`, so Sky does not go dark if Cloudflare has a bad day, and the local path stays low-latency for Phase 4 voice.
+5. **`depends_on: condition: service_healthy`** on the tunnel — Sky is not published until she is answering.
+
+### Configuration
+
+| | |
+|---|---|
+| Tunnel | `sky-node`, `cloudflared` container on the `sky` network |
+| Public hostname | `sky.overlordlabs.net` → **HTTP** → **`gateway:8080`** |
+| Session duration | 1 month, set on the policy (which overrides the application value) |
+| Identity | Cloudflare One-time PIN — emailed code. No external IdP. |
+
+**Why `gateway:8080` and not `localhost:18090`:** `cloudflared` is a container on the same Docker network and reaches the gateway by service name on its internal port. Same reasoning as `POSTGRES_HOST=postgres`.
+
+**Why HTTP on that hop:** TLS terminates at Cloudflare's edge. The final hop is container-to-container inside one host and never crosses a wire. A self-signed certificate with verification disabled would be encrypted but unauthenticated — theatre, and worse than plaintext because it reads as secure on a config screen.
+
+**Also required:** `profiles: [tunnel]` had to be removed from `docker-compose.yml`. Portainer cannot pass Compose profile flags, so the service would never have started and no error would have explained why.
+
+### Consequences and open obligations
+
+- **Sky still has no authentication of her own.** Access is a single layer. Defense in depth belongs with the Phase 6 approval queue.
+- 🔴 **The login is circular, and this blocks Phase 2.** The Access one-time PIN is emailed to `overlord@overlordlabs.net`. In Phase 2, Sky gains read access to that same mailbox — so whoever controls the inbox controls both the assistant and the key to it. **Before any email credential is issued to Sky, authentication must move to a provider with real MFA, or MFA must be enabled at the Access layer.**
+- Machine-to-machine callers (an ActivePieces flow, an uptime monitor) will receive an HTML login page rather than a clean 401. **Service tokens** are the mechanism; not needed until Phase 2.
+- `GATEWAY_ALLOWED_ORIGINS` currently lists only the LAN hostname. Phase 1 WebSocket connections from the public hostname will be rejected until it is added.
+
+**Revisit when:** Sky gains her own login (Phase 6), or the Access policy is ever edited — in which case re-run the anonymous-browser test before trusting it.
+
+---
 ---
 ## Restore drill log
 
