@@ -9,112 +9,63 @@
 #  HOW IT GETS DEPLOYED
 #  Portainer clones this repo and hands this file to Docker. Secrets come
 #  from Portainer's environment-variable box, NOT from a .env file — .env
-#  is gitignored and therefore absent from the clone. That's deliberate
-#  (DL-003): the thing that keeps secrets out of GitHub is the same thing
-#  that means they arrive another way.
+#  is gitignored and therefore absent from the clone (DL-003, DL-008).
 #
-#  SECURITY POSTURE
-#  Nothing binds to a routable address. Every published port is loopback
-#  only (127.0.0.1). Caddy reaches the gateway from the host and serves it
-#  as sky.home.overlordlabs.net. The router forwards nothing. (DL-004)
+#  HOW SKY IS REACHED
+#    LAN      → Caddy on the host → 127.0.0.1:18090
+#    Internet → Cloudflare Access (identity gate) → Tunnel → gateway:8080
+#  No inbound ports are open in either case (DL-004, DL-009).
 # ═══════════════════════════════════════════════════════════════════════
 
-# The project name. Docker prefixes resources with it and Portainer shows
-# it as the stack name.
 name: sky
 
-
-# `services:` lists the containers. Each key below is a service name — and
-# that name doubles as the container's HOSTNAME on the shared network. That
-# is why the gateway reaches the database at "postgres" and not "localhost".
 services:
 
   # ───────────────────────────────────────────────────────────────────
   #  POSTGRES — memory, knowledge, telemetry, audit
   # ───────────────────────────────────────────────────────────────────
   postgres:
-
-    # We BUILD this image instead of pulling one ready-made.
-    #
-    # WHY (learned the hard way, 2026-08-07): the schema files in db/init
-    # used to be handed in via a bind mount — a folder shared from the host.
-    # Portainer clones the repo to a path inside its OWN container, but
-    # Docker resolves bind mounts against the HOST filesystem. The path
-    # wasn't there, so Docker silently created an EMPTY folder rather than
-    # failing, and Postgres started with no schema whatsoever.
-    #
-    # db/Dockerfile copies the SQL into the image itself. No host paths, no
-    # silent failure, identical behaviour on any machine.
+    # Built locally so the schema travels inside the image. A bind mount
+    # silently resolved to an empty folder under Portainer and Postgres
+    # initialized with no schema at all — see DL-007.
     build:
-      context: ./db              # folder Docker builds from
-      dockerfile: Dockerfile     # the recipe inside that folder
-
-    # Always rebuild rather than reusing a cached image. Without this,
-    # "Pull and redeploy" quietly runs your OLD code and you lose an hour
-    # wondering why a fix didn't take.
+      context: ./db
+      dockerfile: Dockerfile
     pull_policy: build
-
-    # Fixed name so `docker logs sky-postgres` always works, instead of
-    # Docker inventing something like sky-postgres-1.
     container_name: sky-postgres
-
-    # Restart automatically if it crashes or the machine reboots —
-    # but NOT if you stopped it deliberately. That's the "unless-stopped"
-    # part, and it's why a reboot brings Sky back on its own.
     restart: unless-stopped
 
-    # ${VAR} pulls from Portainer's environment variables. None of these
-    # have a fallback: a missing password should fail loudly at startup,
-    # not silently start an insecure database.
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
 
-    # A NAMED VOLUME — storage Docker manages, living outside the container.
-    # This is what makes the database survive redeploys, restarts, and
-    # reboots. Delete the container and the data stays; delete the volume
-    # and it's gone.
+    # Named volume — survives redeploys, restarts, and reboots.
     volumes:
       - sky-pgdata:/var/lib/postgresql/data
 
-    # HOST_IP : HOST_PORT : CONTAINER_PORT
-    # Binding to 127.0.0.1 means only the Mac Pro itself can connect.
-    # Nothing else on your network can reach the database. Ever.
     ports:
       - "127.0.0.1:5432:5432"
 
-    # How the container proves it's actually working, not just running.
-    # pg_isready asks Postgres "are you accepting connections?"
-    #
-    # NOTE THE $$ — that's an escape. A single $ would make Compose
-    # substitute the value here, before the container ever starts. $$
-    # passes a literal $ through so the SHELL INSIDE the container expands
-    # it at check time.
+    # $$ escapes the $ so the shell INSIDE the container expands it,
+    # rather than Compose substituting it before the container exists.
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
-      interval: 10s        # check every 10 seconds
-      timeout: 5s          # a check taking >5s counts as failed
-      retries: 5           # 5 failures in a row = unhealthy
-      start_period: 20s    # grace period at boot; failures here don't count
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
 
-    # Shared-memory size. Postgres uses it for sorts and parallel queries.
-    # Docker's 64MB default is small enough to cause odd errors under load.
     shm_size: 256mb
-
     networks: [sky]
 
-    # Cap log size so a chatty container can't slowly fill the disk —
-    # a genuinely common way self-hosted boxes die months later.
-    #
-    # `&loglimit` is a YAML ANCHOR: it names this block so other services
-    # can reuse it with `*loglimit` instead of repeating it.
+    # &loglimit names this block so other services reuse it with *loglimit.
+    # Caps log size so a chatty container can't slowly fill the disk.
     logging: &loglimit
       driver: json-file
       options:
-        max-size: "10m"    # rotate at 10MB
-        max-file: "3"      # keep 3 rotations, then discard oldest
-
+        max-size: "10m"
+        max-file: "3"
 
   # ───────────────────────────────────────────────────────────────────
   #  GATEWAY — the front door. Sessions, streaming, telemetry.
@@ -128,9 +79,8 @@ services:
     restart: unless-stopped
 
     environment:
-      # ${VAR:-default} means "use VAR, or this fallback if it's empty."
-      # Same "or else" idea as || in bash. Only the real secrets are left
-      # without a default, so their absence fails loudly.
+      # ${VAR:-default} = "use VAR, or this fallback." Only real secrets
+      # are left without a default, so their absence fails loudly.
       SKY_IDENTITY_NAME: ${SKY_IDENTITY_NAME:-Sky Prime}
       SKY_ADDRESS_NAME: ${SKY_ADDRESS_NAME:-Sky}
       SKY_ENV: ${SKY_ENV:-production}
@@ -139,8 +89,7 @@ services:
       GATEWAY_ALLOWED_ORIGINS: ${GATEWAY_ALLOWED_ORIGINS:-}
 
       # "postgres" is the SERVICE NAME above. Docker's internal DNS
-      # resolves it to that container's address. Using "localhost" here
-      # would mean the gateway itself — a classic mistake.
+      # resolves it to that container. "localhost" would mean the gateway.
       POSTGRES_HOST: postgres
       POSTGRES_PORT: "5432"
       POSTGRES_USER: ${POSTGRES_USER}
@@ -150,22 +99,17 @@ services:
       SKY_MONTHLY_COST_CAP_USD: ${SKY_MONTHLY_COST_CAP_USD:-50}
       SKY_COST_ALERT_THRESHOLD: ${SKY_COST_ALERT_THRESHOLD:-0.75}
 
-    # Don't just wait for Postgres to EXIST — wait for it to report
-    # HEALTHY. Without `condition`, the gateway would start while the
-    # database is still initializing and fail its first connection.
+    # Wait for Postgres to report HEALTHY, not merely to exist.
     depends_on:
       postgres:
         condition: service_healthy
 
-    # 8080 INSIDE the container (where the app listens), published as
-    # 18090 on the host — because CasaOS already owns 8080. Only the
-    # outside number changed; the app never knew.
+    # 8080 inside, published as 18090 on the host because CasaOS owns 8080.
+    # Caddy reaches it here. cloudflared does NOT — it uses gateway:8080
+    # over the internal network.
     ports:
       - "127.0.0.1:18090:8080"
 
-    # Asks the gateway's own /health endpoint and requires HTTP 200.
-    # /health returns 503 when it can't reach the database, so a broken
-    # connection surfaces as "unhealthy" instead of a silent half-failure.
     healthcheck:
       test: ["CMD", "python", "-c",
              "import urllib.request,sys;sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/health',timeout=4).status==200 else 1)"]
@@ -175,42 +119,44 @@ services:
       start_period: 20s
 
     networks: [sky]
-    logging: *loglimit          # reuses the anchor defined above
-
+    logging: *loglimit
 
   # ───────────────────────────────────────────────────────────────────
-  #  CLOUDFLARED — optional public tunnel. NOT running.
+  #  CLOUDFLARED — the public path
+  #
+  #  Dials OUT to Cloudflare and holds the connection open. Nothing on
+  #  the router listens, so there is no inbound surface to scan (DL-004).
+  #
+  #  ← CHANGED: `profiles: [tunnel]` removed. That flag meant the service
+  #    only started with `docker compose --profile tunnel up`, and
+  #    Portainer has no way to pass it. The service would simply never
+  #    have appeared, with no error to explain why.
+  #
+  #  ⚠️ Cloudflare ACCESS sits in front of this at Cloudflare's edge.
+  #     An unauthenticated request is stopped there and never reaches
+  #     this container. The tunnel carries traffic; it does not guard it.
   # ───────────────────────────────────────────────────────────────────
   cloudflared:
     image: cloudflare/cloudflared:latest
     container_name: sky-tunnel
     restart: unless-stopped
 
-    # `profiles` means this service is SKIPPED unless explicitly requested
-    # with --profile tunnel. It's defined and dormant. Since Caddy already
-    # handles your subdomains, this may never be switched on.
-    profiles: [tunnel]
+    # No default on the token: an empty one should fail loudly rather
+    # than start a connector that quietly connects to nothing.
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
 
-    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    # Don't publish Sky to the internet until she's actually answering.
     depends_on:
       gateway:
         condition: service_healthy
+
     networks: [sky]
     logging: *loglimit
 
-
-# ═══════════════════════════════════════════════════════════════════════
-#  Declare the named volume so Docker manages its lifecycle.
-#  Without this block, the `sky-pgdata:` reference above is an error.
-# ═══════════════════════════════════════════════════════════════════════
 volumes:
   sky-pgdata:
     name: sky-pgdata
 
-# ═══════════════════════════════════════════════════════════════════════
-#  A private network for these containers. They can talk to each other by
-#  service name; nothing outside the network can reach them directly.
-# ═══════════════════════════════════════════════════════════════════════
 networks:
   sky:
     name: sky
